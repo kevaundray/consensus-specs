@@ -7,9 +7,9 @@ from eth2spec.test.context import (
 )
 from eth2spec.test.helpers.sharding import (
     get_sample_blob,
+    compute_sample_cell_and_proof
 )
 from eth2spec.utils.bls import BLS_MODULUS
-
 
 @with_eip7594_and_later
 @spec_test
@@ -32,9 +32,8 @@ def test_fft(spec):
 @spec_test
 @single_phase
 def test_verify_cell_proof(spec):
-    blob = get_sample_blob(spec)
+    blob, cells, proofs = compute_sample_cell_and_proof(spec)
     commitment = spec.blob_to_kzg_commitment(blob)
-    cells, proofs = spec.compute_cells_and_proofs(blob)
 
     cell_id = 0
     assert spec.verify_cell_proof(commitment, cell_id, cells[cell_id], proofs[cell_id])
@@ -46,9 +45,8 @@ def test_verify_cell_proof(spec):
 @spec_test
 @single_phase
 def test_verify_cell_proof_batch(spec):
-    blob = get_sample_blob(spec)
+    blob, cells, proofs = compute_sample_cell_and_proof(spec)
     commitment = spec.blob_to_kzg_commitment(blob)
-    cells, proofs = spec.compute_cells_and_proofs(blob)
 
     assert len(cells) == len(proofs)
 

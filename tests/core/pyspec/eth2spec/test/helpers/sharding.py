@@ -10,7 +10,7 @@ from eth2spec.utils.ssz.ssz_typing import (
     uint8,
 )
 from eth2spec.utils.ssz.ssz_impl import serialize
-
+import threading
 
 #
 # Containers from EIP-4844
@@ -65,6 +65,27 @@ def get_sample_blob(spec, rng=random.Random(5566), is_valid_blob=True):
         b += v.to_bytes(32, spec.KZG_ENDIANNESS)
 
     return spec.Blob(b)
+
+import threading
+
+# global variable and lock
+blob = None
+cells = None
+proofs = None
+lock = threading.Lock()
+
+def compute_sample_cell_and_proof(spec):
+    global blob
+    global cells
+    global proofs
+    with lock:
+        # If value already computed, then return value
+        if cells is not None:
+            return blob, cells, proofs
+        
+        blob = get_sample_blob(spec)
+        cells, proofs = spec.compute_cells_and_proofs(blob)
+        return blob,cells,proofs
 
 
 def eval_poly_in_coeff_form(spec, coeffs, x):
