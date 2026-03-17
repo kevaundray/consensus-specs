@@ -10,6 +10,7 @@ GLOAS = "gloas"
 HEZE = "heze"
 EIP7928 = "eip7928"
 EIP8025 = "eip8025"
+SSZ = "ssz"
 
 
 # The helper functions that are used when defining constants
