@@ -463,6 +463,196 @@ non-exhaustive list:
 Efficient algorithms for computing this object can be found in
 [the implementations](#implementations).
 
+#### `deserialize_basic`
+
+```python
+def deserialize_basic(data: bytes, typ):
+    """Deserialize a basic SSZ value (uintN or boolean)."""
+    expected_length = size_of(typ)
+    assert len(data) == expected_length, f"Expected {expected_length} bytes, got {len(data)}"
+    if issubclass(typ, boolean):
+        assert data in (b"\x00", b"\x01"), f"Invalid boolean value: 0x{data.hex()}"
+        return typ(data == b"\x01")
+    elif issubclass(typ, uint):
+        return typ(int.from_bytes(data, "little"))
+    else:
+        raise ValueError(f"deserialize_basic: not a basic type: {typ}")
+```
+
+#### `deserialize_bitvector`
+
+```python
+def deserialize_bitvector(data: bytes, typ):
+    """Deserialize a Bitvector[N]."""
+    N = typ.vector_length()
+    expected_bytes = (N + 7) // 8
+    assert len(data) == expected_bytes, f"Expected {expected_bytes} bytes for Bitvector[{N}], got {len(data)}"
+    if N % 8 != 0:
+        assert data[-1] >> (N % 8) == 0, "Non-zero padding bits in Bitvector"
+    return typ(bool((data[i // 8] >> (i % 8)) & 1) for i in range(N))
+```
+
+#### `deserialize_bitlist`
+
+```python
+def deserialize_bitlist(data: bytes, typ):
+    """Deserialize a Bitlist[N]. Finds the length delimiter bit."""
+    assert len(data) >= 1, "Bitlist must have at least 1 byte for length delimiter"
+    last_byte = data[-1]
+    assert last_byte != 0, "Last byte must have the delimiter bit set"
+    delimiter_index = last_byte.bit_length() - 1
+    bit_length = (len(data) - 1) * 8 + delimiter_index
+    assert bit_length <= typ.limit(), f"Bitlist length {bit_length} exceeds limit {typ.limit()}"
+    return typ(bool((data[i // 8] >> (i % 8)) & 1) for i in range(bit_length))
+```
+
+#### `deserialize_vector`
+
+```python
+def deserialize_vector(data: bytes, typ):
+    """Deserialize a Vector[T, N]."""
+    elem_type = typ.element_cls()
+    length = typ.vector_length()
+    if is_variable_size(elem_type):
+        return typ(deserialize_variable_elements(data, elem_type, length))
+    else:
+        elem_size = size_of(elem_type) if is_basic_type(elem_type) else elem_type.type_byte_length()
+        assert len(data) == length * elem_size, (
+            f"Expected {length * elem_size} bytes for Vector of {length} elements, got {len(data)}"
+        )
+        return typ(deserialize(data[i * elem_size:(i + 1) * elem_size], elem_type) for i in range(length))
+```
+
+#### `deserialize_list`
+
+```python
+def deserialize_list(data: bytes, typ):
+    """Deserialize a List[T, N]."""
+    elem_type = typ.element_cls()
+    if len(data) == 0:
+        return typ()
+    if is_variable_size(elem_type):
+        assert len(data) >= BYTES_PER_LENGTH_OFFSET, "Data too short for variable-size list"
+        first_offset = int.from_bytes(data[:BYTES_PER_LENGTH_OFFSET], "little")
+        assert first_offset % BYTES_PER_LENGTH_OFFSET == 0, "First offset not aligned"
+        num_elements = first_offset // BYTES_PER_LENGTH_OFFSET
+        assert num_elements <= typ.limit(), f"List length {num_elements} exceeds limit {typ.limit()}"
+        return typ(deserialize_variable_elements(data, elem_type, num_elements))
+    else:
+        elem_size = size_of(elem_type) if is_basic_type(elem_type) else elem_type.type_byte_length()
+        assert len(data) % elem_size == 0, f"Data length {len(data)} not aligned to element size {elem_size}"
+        num_elements = len(data) // elem_size
+        assert num_elements <= typ.limit(), f"List length {num_elements} exceeds limit {typ.limit()}"
+        return typ(deserialize(data[i * elem_size:(i + 1) * elem_size], elem_type) for i in range(num_elements))
+```
+
+#### `deserialize_variable_elements`
+
+```python
+def deserialize_variable_elements(data: bytes, elem_type, num_elements: int) -> list:
+    """Parse variable-size elements from offset-delimited data."""
+    offsets = [
+        int.from_bytes(data[i * BYTES_PER_LENGTH_OFFSET:(i + 1) * BYTES_PER_LENGTH_OFFSET], "little")
+        for i in range(num_elements)
+    ]
+    assert offsets[0] == num_elements * BYTES_PER_LENGTH_OFFSET, "First offset invalid"
+    for i in range(len(offsets) - 1):
+        assert offsets[i] <= offsets[i + 1], f"Offsets out of order at index {i}"
+    assert offsets[-1] <= len(data), f"Last offset {offsets[-1]} exceeds data length {len(data)}"
+    elements = []
+    for i in range(num_elements):
+        start = offsets[i]
+        end = offsets[i + 1] if i + 1 < num_elements else len(data)
+        elements.append(deserialize(data[start:end], elem_type))
+    return elements
+```
+
+#### `deserialize_container`
+
+```python
+def deserialize_container(data: bytes, typ):
+    """Deserialize a Container."""
+    field_names = list(typ.fields().keys())
+    field_types = list(typ.fields().values())
+    if len(field_names) == 0:
+        assert len(data) == 0, "Non-empty data for empty container"
+        return typ()
+
+    fixed_lengths = [
+        BYTES_PER_LENGTH_OFFSET if is_variable_size(ft) else (size_of(ft) if is_basic_type(ft) else ft.type_byte_length())
+        for ft in field_types
+    ]
+    fixed_region_size = sum(fixed_lengths)
+    assert len(data) >= fixed_region_size, f"Data too short: {len(data)} < {fixed_region_size}"
+
+    offsets = []
+    field_values = {}
+    pos = 0
+    for i, ft in enumerate(field_types):
+        if is_variable_size(ft):
+            offset = int.from_bytes(data[pos:pos + BYTES_PER_LENGTH_OFFSET], "little")
+            offsets.append((i, offset))
+            pos += BYTES_PER_LENGTH_OFFSET
+        else:
+            field_values[i] = deserialize(data[pos:pos + fixed_lengths[i]], ft)
+            pos += fixed_lengths[i]
+
+    for j, (i, offset) in enumerate(offsets):
+        next_offset = offsets[j + 1][1] if j + 1 < len(offsets) else len(data)
+        assert offset <= next_offset, f"Offsets out of order for field {field_names[i]}"
+        assert next_offset <= len(data), f"Offset out of range for field {field_names[i]}"
+        field_values[i] = deserialize(data[offset:next_offset], field_types[i])
+
+    return typ(**{field_names[i]: field_values[i] for i in range(len(field_names))})
+```
+
+#### `deserialize_union`
+
+```python
+def deserialize_union(data: bytes, typ):
+    """Deserialize a Union type."""
+    assert len(data) >= 1, "Union must have at least 1 byte for selector"
+    selector = data[0]
+    options = typ.options()
+    assert selector < len(options), f"Invalid union selector {selector}, only {len(options)} options"
+    if options[selector] is None:
+        assert len(data) == 1, "None union variant must be exactly 1 byte"
+        return typ(selector=selector, value=None)
+    inner = deserialize(data[1:], options[selector])
+    return typ(selector=selector, value=inner)
+```
+
+#### `deserialize`
+
+```python
+def deserialize(data: bytes, typ):
+    """Deserialize SSZ bytes into a value of the given type."""
+    if issubclass(typ, (uint, boolean)):
+        return deserialize_basic(data, typ)
+    elif issubclass(typ, Bitvector):
+        return deserialize_bitvector(data, typ)
+    elif issubclass(typ, Bitlist):
+        return deserialize_bitlist(data, typ)
+    elif issubclass(typ, ByteVector):
+        assert len(data) == typ.vector_length(), (
+            f"Expected {typ.vector_length()} bytes for ByteVector, got {len(data)}"
+        )
+        return typ(data)
+    elif issubclass(typ, ByteList):
+        assert len(data) <= typ.limit(), f"ByteList length {len(data)} exceeds limit {typ.limit()}"
+        return typ(data)
+    elif issubclass(typ, Union):
+        return deserialize_union(data, typ)
+    elif issubclass(typ, Container):
+        return deserialize_container(data, typ)
+    elif issubclass(typ, Vector):
+        return deserialize_vector(data, typ)
+    elif issubclass(typ, List):
+        return deserialize_list(data, typ)
+    else:
+        raise ValueError(f"deserialize: unhandled type: {typ}")
+```
+
 ## Merkleization
 
 We first define helper functions:
