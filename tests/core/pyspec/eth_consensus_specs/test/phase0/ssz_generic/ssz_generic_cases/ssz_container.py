@@ -55,6 +55,12 @@ class ComplexTestStruct(Container):
     G: Vector[VarTestStruct, 2]
 
 
+class ContainerListTestStruct(Container):
+    A: uint16
+    B: List[VarTestStruct, 8]
+    C: uint8
+
+
 class ProgressiveTestStruct(Container):
     A: ProgressiveList[byte]
     B: ProgressiveList[uint64]
@@ -97,6 +103,7 @@ PRESET_CONTAINERS: dict[str, tuple[type[View], Sequence[int]]] = {
     "FixedTestStruct": (FixedTestStruct, []),
     "VarTestStruct": (VarTestStruct, [2]),
     "ComplexTestStruct": (ComplexTestStruct, [2, 2 + 4 + 1, 2 + 4 + 1 + 4]),
+    "ContainerListTestStruct": (ContainerListTestStruct, [2]),
     "ProgressiveTestStruct": (ProgressiveTestStruct, [0, 4, 8, 12]),
     "BitsStruct": (BitsStruct, [0, 4 + 1 + 1, 4 + 1 + 1 + 4]),
     "ProgressiveBitsStruct": (ProgressiveBitsStruct, [32, 36, 73, 77, 241, 245, 410, 414]),
@@ -142,10 +149,153 @@ def valid_container_cases(rng: Random, name: str, typ: type[View], offsets: Sequ
             )
 
 
+def empty_list_cases():
+    """
+    Explicit test cases for containers with selectively empty list fields.
+    Catches implementations that incorrectly mix in the list limit
+    instead of 0 for the length when computing hash tree roots of empty lists.
+
+    Note: cases where *all* lists are empty are already covered by mode_nil_count
+    in valid_container_cases via PRESET_CONTAINERS. These cases target selective
+    emptiness (e.g. B empty but D populated) which mode_nil_count cannot produce.
+    """
+    rng = Random(5678)
+
+    # ComplexTestStruct: empty basic list B, other fields populated
+    yield (
+        "ComplexTestStruct_empty_list_B",
+        valid_test_case(
+            lambda rng: ComplexTestStruct(
+                A=uint16(0xDEAD),
+                B=List[uint16, 128](),
+                C=uint8(0x42),
+                D=ByteList[256](b"\xab\xcd\xef"),
+                E=VarTestStruct(
+                    A=uint16(0x5678),
+                    B=List[uint16, 1024](uint16(1), uint16(2)),
+                    C=uint8(0xFF),
+                ),
+                F=Vector[FixedTestStruct, 4](
+                    *(FixedTestStruct(A=uint8(i), B=uint64(i * 10), C=uint32(i * 100))
+                      for i in range(4))
+                ),
+                G=Vector[VarTestStruct, 2](
+                    VarTestStruct(
+                        A=uint16(0xAAAA),
+                        B=List[uint16, 1024](uint16(100), uint16(200)),
+                        C=uint8(0x01),
+                    ),
+                    VarTestStruct(
+                        A=uint16(0xBBBB),
+                        B=List[uint16, 1024](uint16(300), uint16(400)),
+                        C=uint8(0x02),
+                    ),
+                ),
+            ),
+            rng,
+        ),
+    )
+
+    # ComplexTestStruct: empty byte list D, other fields populated
+    yield (
+        "ComplexTestStruct_empty_list_D",
+        valid_test_case(
+            lambda rng: ComplexTestStruct(
+                A=uint16(0xBEEF),
+                B=List[uint16, 128](uint16(1), uint16(2), uint16(3)),
+                C=uint8(0x33),
+                D=ByteList[256](b""),
+                E=VarTestStruct(
+                    A=uint16(0x9999),
+                    B=List[uint16, 1024](uint16(7), uint16(8)),
+                    C=uint8(0x11),
+                ),
+                F=Vector[FixedTestStruct, 4](
+                    *(FixedTestStruct(A=uint8(i + 10), B=uint64(i * 20), C=uint32(i * 200))
+                      for i in range(4))
+                ),
+                G=Vector[VarTestStruct, 2](
+                    VarTestStruct(
+                        A=uint16(0xCCCC),
+                        B=List[uint16, 1024](uint16(300), uint16(400)),
+                        C=uint8(0x03),
+                    ),
+                    VarTestStruct(
+                        A=uint16(0xDDDD),
+                        B=List[uint16, 1024](uint16(500)),
+                        C=uint8(0x04),
+                    ),
+                ),
+            ),
+            rng,
+        ),
+    )
+
+    # ComplexTestStruct: both list fields B and D empty, nested lists populated
+    yield (
+        "ComplexTestStruct_empty_lists_BD",
+        valid_test_case(
+            lambda rng: ComplexTestStruct(
+                A=uint16(0xFACE),
+                B=List[uint16, 128](),
+                C=uint8(0x77),
+                D=ByteList[256](b""),
+                E=VarTestStruct(
+                    A=uint16(0x1111),
+                    B=List[uint16, 1024](uint16(42)),
+                    C=uint8(0x22),
+                ),
+                F=Vector[FixedTestStruct, 4](
+                    *(FixedTestStruct(A=uint8(i + 20), B=uint64(i * 30), C=uint32(i * 300))
+                      for i in range(4))
+                ),
+                G=Vector[VarTestStruct, 2](
+                    VarTestStruct(
+                        A=uint16(0xEEEE),
+                        B=List[uint16, 1024](uint16(600)),
+                        C=uint8(0x05),
+                    ),
+                    VarTestStruct(
+                        A=uint16(0xFFFF),
+                        B=List[uint16, 1024](uint16(700), uint16(800)),
+                        C=uint8(0x06),
+                    ),
+                ),
+            ),
+            rng,
+        ),
+    )
+
+    # ContainerListTestStruct: non-empty container list with empty inner lists
+    yield (
+        "ContainerListTestStruct_nested_empty_lists",
+        valid_test_case(
+            lambda rng: ContainerListTestStruct(
+                A=uint16(0x9876),
+                B=List[VarTestStruct, 8](
+                    VarTestStruct(
+                        A=uint16(0x1111),
+                        B=List[uint16, 1024](),
+                        C=uint8(0xAA),
+                    ),
+                    VarTestStruct(
+                        A=uint16(0x2222),
+                        B=List[uint16, 1024](),
+                        C=uint8(0xBB),
+                    ),
+                ),
+                C=uint8(0xCC),
+            ),
+            rng,
+        ),
+    )
+
+
 def valid_cases():
     rng = Random(1234)
     for name, (typ, offsets) in PRESET_CONTAINERS.items():
         yield from valid_container_cases(rng, name, typ, offsets)
+    yield from empty_list_cases()
 
 
 def mod_offset(b: bytes, offset_index: int, change: Callable[[int], int]):
