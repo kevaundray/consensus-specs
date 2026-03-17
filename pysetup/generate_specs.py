@@ -289,6 +289,39 @@ def generate_ssz_spec(out_dir: Path, verbose: bool = False) -> None:
         print(f"  Wrote: {out_file} ({len(spec_str):,} bytes)")
 
 
+def generate_ssz_typing(out_dir: Path, verbose: bool = False) -> None:
+    """
+    Generate the SSZ type system module from ssz/ssz-typing.md.
+
+    Extracts all Python code blocks from the markdown and concatenates them.
+    Unlike fork specs, this uses simple regex extraction — the type system
+    classes don't follow the MarkdownToSpec conventions.
+    """
+    import re
+
+    source_file = Path("ssz/ssz-typing.md")
+    if not source_file.exists():
+        raise FileNotFoundError(f"SSZ typing spec not found: {source_file}")
+
+    if verbose:
+        print(f"Generating SSZ typing from: {source_file}")
+
+    content = source_file.read_text()
+    code_blocks = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
+
+    if not code_blocks:
+        raise ValueError(f"No Python code blocks found in {source_file}")
+
+    spec_str = "\n\n\n".join(block.strip() for block in code_blocks) + "\n"
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "ssz_typing.py"
+    out_file.write_text(spec_str)
+
+    if verbose:
+        print(f"  Wrote: {out_file} ({len(spec_str):,} bytes)")
+
+
 def main() -> int:
     """Main entry point for the spec generation script."""
     parser = argparse.ArgumentParser(
@@ -396,6 +429,7 @@ Examples:
         if args.all_forks or getattr(args, 'ssz', False):
             ssz_out_dir = Path("tests/core/pyspec/eth_consensus_specs/utils/ssz")
             generate_ssz_spec(ssz_out_dir, verbose=args.verbose)
+            generate_ssz_typing(ssz_out_dir, verbose=args.verbose)
 
         if args.verbose:
             print(f"\nSuccessfully generated {len(forks)} fork(s)")
