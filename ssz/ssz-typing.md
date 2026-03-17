@@ -29,6 +29,25 @@ class View:
     def __deepcopy__(self, memo):
         return self.copy()
 
+    def hash_tree_root(self):
+        from eth_consensus_specs.utils.ssz.ssz_spec import hash_tree_root as _htr
+        return _htr(self)
+
+    def get_backing(self):
+        return self.copy()
+
+    def set_backing(self, backing):
+        """Restore state from a previously cached backing (copy)."""
+        if hasattr(backing, '__dict__'):
+            for key, value in backing.__dict__.items():
+                self.__dict__[key] = value
+        if hasattr(backing, '_data'):
+            self._data = backing._data
+
+    def encode_bytes(self):
+        from eth_consensus_specs.utils.ssz.ssz_spec import serialize as _ser
+        return _ser(self)
+
 
 class BasicView(View):
     """Base class for basic SSZ types (uintN, boolean)."""
@@ -50,7 +69,14 @@ class uint(BasicView, int):
     def __new__(cls, value=0):
         if isinstance(value, bytes):
             value = int.from_bytes(value, "little")
-        return int.__new__(cls, int(value))
+        value = int(value)
+        if cls._byte_length > 0:
+            max_value = 2 ** (cls._byte_length * 8)
+            if value < 0 or value >= max_value:
+                raise ValueError(
+                    f"Value {value} out of range for {cls.__name__} (0 to {max_value - 1})"
+                )
+        return int.__new__(cls, value)
 
     @classmethod
     def type_byte_length(cls):
@@ -104,6 +130,24 @@ class boolean(BasicView):
     def __hash__(self):
         return hash(self._value)
 
+    def __add__(self, other):
+        return int(self) + int(other)
+
+    def __radd__(self, other):
+        return int(other) + int(self)
+
+    def __sub__(self, other):
+        return int(self) - int(other)
+
+    def __rsub__(self, other):
+        return int(other) - int(self)
+
+    def __mul__(self, other):
+        return int(self) * int(other)
+
+    def __rmul__(self, other):
+        return int(other) * int(self)
+
     def __repr__(self):
         return f"boolean({self._value})"
 
@@ -143,6 +187,11 @@ class ByteVector(View, bytes):
             data = b"\x00" * cls._length
         if isinstance(data, int):
             data = b"\x00" * data
+        if isinstance(data, str):
+            if data.startswith("0x") or data.startswith("0X"):
+                data = bytes.fromhex(data[2:])
+            else:
+                data = bytes.fromhex(data)
         instance = bytes.__new__(cls, data)
         if cls._length > 0:
             assert len(instance) == cls._length, (
@@ -186,6 +235,11 @@ class ByteList(View, bytes):
     def __new__(cls, data=b""):
         if isinstance(data, int):
             data = b"\x00" * data
+        if isinstance(data, str):
+            if data.startswith("0x") or data.startswith("0X"):
+                data = bytes.fromhex(data[2:])
+            else:
+                data = bytes.fromhex(data)
         instance = bytes.__new__(cls, data)
         if cls._limit > 0:
             assert len(instance) <= cls._limit, (
@@ -244,14 +298,19 @@ class Vector(View):
             )
         return Vector._type_cache[key]
 
+    def _coerce(self, value):
+        if self._element_type and not isinstance(value, self._element_type):
+            return self._element_type(value)
+        return value
+
     def __init__(self, *args):
         if len(args) == 0:
             # Default: fill with default values
             self._data = [self._element_type() for _ in range(self._length)]
         elif len(args) == 1 and hasattr(args[0], "__iter__") and not isinstance(args[0], (str, bytes)):
-            self._data = list(args[0])
+            self._data = [self._coerce(v) for v in args[0]]
         else:
-            self._data = list(args)
+            self._data = [self._coerce(v) for v in args]
         assert len(self._data) == self._length, (
             f"Vector expects {self._length} elements, got {len(self._data)}"
         )
@@ -263,11 +322,9 @@ class Vector(View):
 
     def __setitem__(self, index, value):
         if isinstance(index, slice):
-            self._data[index] = value
+            self._data[index] = [self._coerce(v) for v in value]
         else:
-            if self._element_type and not isinstance(value, self._element_type):
-                value = self._element_type(value)
-            self._data[index] = value
+            self._data[index] = self._coerce(value)
 
     def __len__(self):
         return len(self._data)
@@ -278,6 +335,8 @@ class Vector(View):
     def __eq__(self, other):
         if isinstance(other, Vector):
             return self._data == other._data
+        if isinstance(other, (list, tuple)):
+            return self._data == list(other)
         return NotImplemented
 
     def __hash__(self):
@@ -330,13 +389,18 @@ class List(View):
             )
         return List._type_cache[key]
 
+    def _coerce(self, value):
+        if self._element_type and not isinstance(value, self._element_type):
+            return self._element_type(value)
+        return value
+
     def __init__(self, *args):
         if len(args) == 0:
             self._data = []
         elif len(args) == 1 and hasattr(args[0], "__iter__") and not isinstance(args[0], (str, bytes)):
-            self._data = list(args[0])
+            self._data = [self._coerce(v) for v in args[0]]
         else:
-            self._data = list(args)
+            self._data = [self._coerce(v) for v in args]
 
     def __getitem__(self, index):
         if isinstance(index, slice):
@@ -346,11 +410,9 @@ class List(View):
 
     def __setitem__(self, index, value):
         if isinstance(index, slice):
-            self._data[index] = value
+            self._data[index] = [self._coerce(v) for v in value]
         else:
-            if self._element_type and not isinstance(value, self._element_type):
-                value = self._element_type(value)
-            self._data[index] = value
+            self._data[index] = self._coerce(value)
 
     def __len__(self):
         return len(self._data)
@@ -361,15 +423,37 @@ class List(View):
     def __eq__(self, other):
         if isinstance(other, List):
             return self._data == other._data
+        if isinstance(other, (list, tuple)):
+            return self._data == list(other)
         return NotImplemented
 
     def __repr__(self):
         return f"{type(self).__name__}({self._data})"
 
+    def __add__(self, other):
+        if isinstance(other, (List, list)):
+            return self.__class__(list(self._data) + list(other))
+        return NotImplemented
+
+    def __radd__(self, other):
+        if isinstance(other, (List, list)):
+            return self.__class__(list(other) + list(self._data))
+        return NotImplemented
+
     def append(self, value):
-        if self._element_type and not isinstance(value, self._element_type):
-            value = self._element_type(value)
-        self._data.append(value)
+        self._data.append(self._coerce(value))
+
+    def count(self, value):
+        return self._data.count(value)
+
+    def index(self, value, *args):
+        return self._data.index(value, *args)
+
+    def pop(self, *args):
+        return self._data.pop(*args)
+
+    def extend(self, values):
+        self._data.extend(self._coerce(v) for v in values)
 
     @classmethod
     def element_cls(cls):
@@ -439,7 +523,12 @@ class Bitvector(View):
     def __eq__(self, other):
         if isinstance(other, Bitvector):
             return self._data == other._data
+        if isinstance(other, (list, tuple)):
+            return self._data == list(other)
         return NotImplemented
+
+    def count(self, value):
+        return self._data.count(value)
 
     @classmethod
     def vector_length(cls):
@@ -498,7 +587,12 @@ class Bitlist(View):
     def __eq__(self, other):
         if isinstance(other, Bitlist):
             return self._data == other._data
+        if isinstance(other, (list, tuple)):
+            return self._data == list(other)
         return NotImplemented
+
+    def count(self, value):
+        return self._data.count(value)
 
     def append(self, value):
         self._data.append(bool(value))
@@ -537,7 +631,15 @@ class Container(View):
             cls._field_names = tuple(annotations.keys())
             cls._field_types = tuple(annotations.values())
 
-    def __init__(self, **kwargs):
+    def __init__(self, *, backing=None, **kwargs):
+        if backing is not None:
+            # Copy from a backing object (used by test caching)
+            for name in self._field_names:
+                val = getattr(backing, name)
+                if hasattr(val, "copy") and callable(val.copy):
+                    val = val.copy()
+                self.__dict__[name] = val
+            return
         for name, typ in zip(self._field_names, self._field_types):
             value = kwargs.get(name)
             if value is None:
@@ -649,20 +751,38 @@ Progressive types support forward-compatible schema evolution. `CompatibleUnion`
 uses `.selector()` and `.data()` method accessors.
 
 ```python
-class ProgressiveContainer(View):
+class _ProgressiveContainerMeta(type):
+    """Metaclass that makes ProgressiveContainer(active_fields=[...]) return a base class."""
+
+    _factory_cache = {}
+
+    def __call__(cls, *args, **kwargs):
+        # When called as ProgressiveContainer(active_fields=[...]) — class factory
+        if cls is ProgressiveContainer and "active_fields" in kwargs and len(args) == 0:
+            af = tuple(kwargs["active_fields"])
+            key = (cls, af)
+            if key not in _ProgressiveContainerMeta._factory_cache:
+                _ProgressiveContainerMeta._factory_cache[key] = type.__call__(
+                    type,
+                    f"ProgressiveContainer(active_fields={list(af)})",
+                    (ProgressiveContainer,),
+                    {"_active_fields": af},
+                )
+            return _ProgressiveContainerMeta._factory_cache[key]
+        # Normal instance creation for subclasses
+        return super().__call__(*args, **kwargs)
+
+
+class ProgressiveContainer(View, metaclass=_ProgressiveContainerMeta):
     _field_names = ()
     _field_types = ()
     _active_fields = ()
 
     def __class_getitem__(cls, params):
-        # ProgressiveContainer(active_fields=[...]) syntax
-        # Not commonly used in class_getitem, but needed for type creation
         return cls
 
-    def __init_subclass__(cls, active_fields=None, **kwargs):
+    def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        if active_fields is not None:
-            cls._active_fields = tuple(active_fields)
         annotations = {}
         for name, typ in getattr(cls, "__annotations__", {}).items():
             if not name.startswith("_"):
@@ -840,10 +960,113 @@ class CompatibleUnion(View):
 
 ## Path
 
-Exists only for import compatibility.
+`Path` supports generalized index computation for container field navigation.
+It is used by `get_generalized_index()` in the fork specs.
 
 ```python
+def _get_depth(elem_count):
+    """Return the Merkle tree depth for the given number of elements."""
+    if elem_count <= 1:
+        return 0
+    return (elem_count - 1).bit_length()
+
+
+def _next_pow_of_two(i):
+    if i <= 1:
+        return 1
+    return 1 << (i - 1).bit_length()
+
+
+def _to_gindex(index, depth):
+    anchor = 1 << depth
+    return anchor | index
+
+
+def _concat_gindices(gindices):
+    out = 1
+    for g in gindices:
+        bit_len = g.bit_length() - 1
+        out <<= bit_len
+        out |= g ^ (1 << bit_len)
+    return out
+
+
 class Path:
-    """Unused — exists only for import compatibility."""
-    pass
+    """Navigate SSZ type trees and compute generalized indices."""
+
+    def __init__(self, anchor, path=None):
+        self._anchor = anchor
+        self._path = path if path is not None else []
+
+    def __truediv__(self, other):
+        if isinstance(other, Path):
+            return Path(self._anchor, self._path + other._path)
+        last_type = self._anchor if not self._path else self._path[-1][1]
+        next_type = _path_navigate_type(last_type, other)
+        return Path(self._anchor, self._path + [(other, next_type)])
+
+    def gindex(self):
+        if not self._path:
+            return 1
+        gindices = []
+        current_type = self._anchor
+        for key, _ in self._path:
+            g = _path_key_to_gindex(current_type, key)
+            gindices.append(g)
+            current_type = _path_navigate_type(current_type, key)
+        return _concat_gindices(gindices)
+
+    def navigate_type(self):
+        if not self._path:
+            return self._anchor
+        return self._path[-1][1]
+
+
+def _path_navigate_type(typ, key):
+    """Given a type and a key, return the type of the child."""
+    if issubclass(typ, (Container, ProgressiveContainer)):
+        return typ.fields()[key]
+    if issubclass(typ, (Vector, List)):
+        return typ.element_cls()
+    if issubclass(typ, (ByteVector, ByteList)):
+        return byte
+    raise TypeError(f"Cannot navigate type {typ} with key {key}")
+
+
+def _path_key_to_gindex(typ, key):
+    """Given a type and a key, return the generalized index for that child."""
+    if issubclass(typ, (Container, ProgressiveContainer)):
+        field_names = list(typ.fields().keys())
+        field_index = field_names.index(key)
+        depth = _get_depth(len(field_names))
+        return _to_gindex(field_index, depth)
+    if issubclass(typ, List):
+        # List has content at gindex 2 (left) and length at gindex 3 (right).
+        # Elements within the content subtree are at depth = log2(next_pow_2(chunk_count)).
+        elem_type = typ.element_cls()
+        limit = typ.limit()
+        if issubclass(elem_type, BasicView):
+            elems_per_chunk = 32 // elem_type.type_byte_length()
+            chunk_i = key // elems_per_chunk
+            max_chunks = (limit * elem_type.type_byte_length() + 31) // 32
+        else:
+            chunk_i = key
+            max_chunks = limit
+        depth = _get_depth(_next_pow_of_two(max_chunks))
+        element_gindex = _to_gindex(chunk_i, depth)
+        # Combine with content gindex (2 = left child of list root)
+        return _concat_gindices([2, element_gindex])
+    if issubclass(typ, Vector):
+        elem_type = typ.element_cls()
+        length = typ.vector_length()
+        if issubclass(elem_type, BasicView):
+            elems_per_chunk = 32 // elem_type.type_byte_length()
+            chunk_i = key // elems_per_chunk
+            max_chunks = (length * elem_type.type_byte_length() + 31) // 32
+        else:
+            chunk_i = key
+            max_chunks = length
+        depth = _get_depth(_next_pow_of_two(max_chunks))
+        return _to_gindex(chunk_i, depth)
+    raise TypeError(f"Cannot compute gindex for type {typ} with key {key}")
 ```
