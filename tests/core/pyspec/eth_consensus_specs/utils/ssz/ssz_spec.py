@@ -180,7 +180,7 @@ def deserialize_basic(data: bytes, typ):
 
 def deserialize_bitvector(data: bytes, typ):
     """Deserialize a Bitvector[N]."""
-    N = typ.vector_length()
+    N = int(typ.vector_length())
     expected_bytes = (N + 7) // 8
     assert len(data) == expected_bytes, f"Expected {expected_bytes} bytes for Bitvector[{N}], got {len(data)}"
     if N % 8 != 0:

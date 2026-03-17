@@ -1,6 +1,6 @@
 """Cross-validate the executable SSZ spec (ssz_spec.py) against remerkleable (ssz_impl.py).
 
-For every Container type defined in the phase0 spec, generates random instances
+For every Container type defined across all fork specs, generates random instances
 using various randomization modes, then asserts that serialize() and hash_tree_root()
 produce identical results between both implementations.
 """
@@ -13,12 +13,14 @@ import pytest
 
 from eth_consensus_specs.debug import random_value
 from eth_consensus_specs.test.context import spec_targets
-from eth_consensus_specs.test.helpers.constants import MINIMAL, PHASE0
+from eth_consensus_specs.test.helpers.constants import MINIMAL, TESTGEN_FORKS
 from eth_consensus_specs.utils.ssz.ssz_impl import (
+    deserialize as impl_deserialize,
     hash_tree_root,
     serialize,
 )
 from eth_consensus_specs.utils.ssz.ssz_spec import (
+    deserialize as spec_deserialize,
     hash_tree_root as spec_hash_tree_root,
     serialize as spec_serialize,
 )
@@ -28,16 +30,22 @@ MAX_BYTES_LENGTH = 1000
 MAX_LIST_LENGTH = 10
 
 
-def _get_phase0_ssz_type_names():
-    """Get all SSZ container type names from the phase0 minimal spec."""
-    spec = spec_targets[MINIMAL][PHASE0]
-    return [
-        name
-        for (name, value) in getmembers(spec, isclass)
-        if issubclass(value, Container | ProgressiveContainer)
-        and value != Container
-        and value != ProgressiveContainer
-    ]
+def _get_ssz_type_params():
+    """Get (fork, ssz_type_name) pairs for all container types across all forks."""
+    seen = set()
+    params = []
+    for fork in TESTGEN_FORKS:
+        spec = spec_targets[MINIMAL][fork]
+        for name, value in getmembers(spec, isclass):
+            if (
+                issubclass(value, Container | ProgressiveContainer)
+                and value != Container
+                and value != ProgressiveContainer
+                and name not in seen
+            ):
+                seen.add(name)
+                params.append((fork, name))
+    return params
 
 
 def _deterministic_seed(**kwargs) -> int:
@@ -48,7 +56,7 @@ def _deterministic_seed(**kwargs) -> int:
     return int.from_bytes(m.digest()[:8], "little")
 
 
-SSZ_TYPE_NAMES = _get_phase0_ssz_type_names()
+SSZ_TYPE_PARAMS = _get_ssz_type_params()
 
 MODES = [
     random_value.RandomizationMode.mode_zero,
@@ -60,13 +68,15 @@ MODES = [
 ]
 
 
-@pytest.mark.parametrize("ssz_type_name", SSZ_TYPE_NAMES)
+@pytest.mark.parametrize(
+    "fork,ssz_type_name", SSZ_TYPE_PARAMS, ids=[f"{fork}-{name}" for fork, name in SSZ_TYPE_PARAMS]
+)
 @pytest.mark.parametrize(
     "mode", MODES, ids=[m.to_name() for m in MODES]
 )
-def test_cross_validate_ssz(ssz_type_name, mode, preset=MINIMAL):
+def test_cross_validate_ssz(fork, ssz_type_name, mode, preset=MINIMAL):
     """Cross-validate serialize and hash_tree_root between spec and impl."""
-    spec = spec_targets[preset][PHASE0]
+    spec = spec_targets[preset][fork]
     ssz_type = getattr(spec, ssz_type_name)
 
     count = 3 if mode.is_changing() else 1
@@ -95,4 +105,16 @@ def test_cross_validate_ssz(ssz_type_name, mode, preset=MINIMAL):
         assert bytes(spec_root) == bytes(impl_root), (
             f"hash_tree_root mismatch for {ssz_type_name} (mode={mode.to_name()}, i={i}): "
             f"spec={bytes(spec_root).hex()} impl={bytes(impl_root).hex()}"
+        )
+
+        # Cross-validate deserialization: round-trip
+        spec_roundtrip = spec_deserialize(impl_serialized, ssz_type)
+        assert spec_serialize(spec_roundtrip) == impl_serialized, (
+            f"Round-trip mismatch for {ssz_type_name} (mode={mode.to_name()}, i={i})"
+        )
+
+        # Cross-validate deserialization: compare against remerkleable
+        impl_roundtrip = impl_deserialize(ssz_type, impl_serialized)
+        assert spec_serialize(spec_roundtrip) == serialize(impl_roundtrip), (
+            f"Deserialize mismatch for {ssz_type_name} (mode={mode.to_name()}, i={i})"
         )
