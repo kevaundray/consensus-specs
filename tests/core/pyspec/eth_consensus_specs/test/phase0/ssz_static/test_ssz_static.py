@@ -16,6 +16,10 @@ from eth_consensus_specs.utils.ssz.ssz_impl import (
     hash_tree_root,
     serialize,
 )
+from eth_consensus_specs.utils.ssz.ssz_spec import (
+    hash_tree_root as spec_hash_tree_root,
+    serialize as spec_serialize,
+)
 from eth_consensus_specs.utils.ssz.ssz_typing import Container, ProgressiveContainer
 from tests.infra.manifest import Manifest, manifest
 from tests.infra.template_test import template_test
@@ -70,6 +74,18 @@ def _template_ssz_static_tests(
         yield "serialized", "ssz", serialize(value)
         roots_data = {"root": "0x" + hash_tree_root(value).hex()}
         yield "roots", "data", roots_data
+
+        # Cross-validate executable SSZ spec against remerkleable
+        spec_serialized = spec_serialize(value)
+        assert spec_serialized == serialize(value), (
+            f"Serialize mismatch for {ssz_type_name}: "
+            f"spec={spec_serialized[:20].hex()}... impl={serialize(value)[:20].hex()}..."
+        )
+        spec_root = spec_hash_tree_root(value)
+        assert bytes(spec_root) == bytes(hash_tree_root(value)), (
+            f"hash_tree_root mismatch for {ssz_type_name}: "
+            f"spec={bytes(spec_root).hex()} impl={bytes(hash_tree_root(value)).hex()}"
+        )
 
     return (the_test, f"test_{unique_name}")
 

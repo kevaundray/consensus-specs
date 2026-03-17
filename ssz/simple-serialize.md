@@ -31,6 +31,7 @@
 - [Merkleization](#merkleization)
   - [`pack`](#pack)
   - [`pack_bits`](#pack_bits)
+  - [`pack_bytes`](#pack_bytes)
   - [`merkleize`](#merkleize)
   - [`mix_in_length`](#mix_in_length)
   - [`mix_in_selector`](#mix_in_selector)
@@ -247,8 +248,14 @@ def chunk_count(typ) -> int:
         else:
             N = typ.limit()
         return (N + 255) // 256
-    if issubclass(typ, (Vector, List, ByteVector, ByteList)):
-        if issubclass(typ, (Vector, ByteVector)):
+    if issubclass(typ, (ByteVector, ByteList)):
+        if issubclass(typ, ByteVector):
+            N = typ.vector_length()
+        else:
+            N = typ.limit()
+        return (N + 31) // 32
+    if issubclass(typ, (Vector, List)):
+        if issubclass(typ, Vector):
             N = typ.vector_length()
         else:
             N = typ.limit()
@@ -395,6 +402,8 @@ def serialize(value) -> bytes:
         return serialize_bitvector(value)
     elif isinstance(value, Bitlist):
         return serialize_bitlist(value)
+    elif isinstance(value, (ByteVector, ByteList)):
+        return bytes(value)
     elif isinstance(value, Union):
         return serialize_union(value)
     elif isinstance(value, (Container, Vector, List)):
@@ -576,6 +585,21 @@ def pack_bits(bits) -> list:
     return [serialized[i:i + BYTES_PER_CHUNK] for i in range(0, len(serialized), BYTES_PER_CHUNK)]
 ```
 
+#### `pack_bytes`
+
+```python
+def pack_bytes(value) -> list:
+    """Pack a ByteVector or ByteList (raw bytes) into chunks."""
+    serialized = bytes(value)
+    if len(serialized) == 0:
+        return []
+    # Pad to multiple of BYTES_PER_CHUNK
+    if len(serialized) % BYTES_PER_CHUNK != 0:
+        serialized += b"\x00" * (BYTES_PER_CHUNK - len(serialized) % BYTES_PER_CHUNK)
+    # Partition into chunks
+    return [serialized[i:i + BYTES_PER_CHUNK] for i in range(0, len(serialized), BYTES_PER_CHUNK)]
+```
+
 #### `merkleize`
 
 ```python
@@ -608,12 +632,11 @@ def merkleize(chunks: list, limit: int = None) -> bytes:
         for i in range(0, len(layer), 2):
             left = layer[i]
             right = layer[i + 1] if i + 1 < len(layer) else zero_hashes[level]
-            new_layer.append(hash(left + right))
-        # If the layer is shorter than expected, pad with precomputed zero hashes
-        expected_len = max(1, num_leaves >> (level + 1))
-        while len(new_layer) < expected_len:
-            new_layer.append(zero_hashes[level + 1])
+            new_layer.append(hash(bytes(left) + bytes(right)))
         layer = new_layer
+        # If the layer is empty (all virtual), use the precomputed zero hash
+        if len(layer) == 0:
+            return zero_hashes[depth]
 
     return layer[0]
 ```
@@ -647,6 +670,13 @@ def hash_tree_root(value) -> bytes:
     elif isinstance(value, Bitlist):
         return mix_in_length(
             merkleize(pack_bits(value), limit=chunk_count(typ)),
+            len(value),
+        )
+    elif isinstance(value, ByteVector):
+        return merkleize(pack_bytes(value))
+    elif isinstance(value, ByteList):
+        return mix_in_length(
+            merkleize(pack_bytes(value), limit=chunk_count(typ)),
             len(value),
         )
     elif isinstance(value, Vector):
