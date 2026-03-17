@@ -630,10 +630,10 @@ class Container(View):
         if annotations:
             cls._field_names = tuple(annotations.keys())
             cls._field_types = tuple(annotations.values())
+            cls._field_type_map = dict(zip(cls._field_names, cls._field_types))
 
     def __init__(self, *, backing=None, **kwargs):
         if backing is not None:
-            # Copy from a backing object (used by test caching)
             for name in self._field_names:
                 val = getattr(backing, name)
                 if hasattr(val, "copy") and callable(val.copy):
@@ -643,18 +643,15 @@ class Container(View):
         for name, typ in zip(self._field_names, self._field_types):
             value = kwargs.get(name)
             if value is None:
-                # Default value for the type
                 value = typ()
             elif not isinstance(value, typ):
                 value = typ(value)
             self.__dict__[name] = value
 
     def __setattr__(self, name, value):
-        if name in self._field_names:
-            idx = self._field_names.index(name)
-            typ = self._field_types[idx]
-            if not isinstance(value, typ):
-                value = typ(value)
+        typ = self._field_type_map.get(name)
+        if typ is not None and not isinstance(value, typ):
+            value = typ(value)
         self.__dict__[name] = value
 
     def __eq__(self, other):
@@ -790,6 +787,7 @@ class ProgressiveContainer(View, metaclass=_ProgressiveContainerMeta):
         if annotations:
             cls._field_names = tuple(annotations.keys())
             cls._field_types = tuple(annotations.values())
+            cls._field_type_map = dict(zip(cls._field_names, cls._field_types))
 
     def __init__(self, **kwargs):
         for name, typ in zip(self._field_names, self._field_types):
@@ -801,11 +799,9 @@ class ProgressiveContainer(View, metaclass=_ProgressiveContainerMeta):
             self.__dict__[name] = value
 
     def __setattr__(self, name, value):
-        if name in self._field_names:
-            idx = self._field_names.index(name)
-            typ = self._field_types[idx]
-            if not isinstance(value, typ):
-                value = typ(value)
+        typ = self._field_type_map.get(name)
+        if typ is not None and not isinstance(value, typ):
+            value = typ(value)
         self.__dict__[name] = value
 
     def __eq__(self, other):

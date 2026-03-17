@@ -340,10 +340,11 @@ def serialize_composite(value) -> bytes:
     assert sum(fixed_lengths + variable_lengths) < 2 ** (BYTES_PER_LENGTH_OFFSET * BITS_PER_BYTE)
 
     # Interleave offsets of variable-size parts with fixed-size parts
-    variable_offsets = [
-        int.to_bytes(sum(fixed_lengths + variable_lengths[:i]), BYTES_PER_LENGTH_OFFSET, "little")
-        for i in range(len(elements))
-    ]
+    offset = sum(fixed_lengths)
+    variable_offsets = []
+    for vlen in variable_lengths:
+        variable_offsets.append(offset.to_bytes(BYTES_PER_LENGTH_OFFSET, "little"))
+        offset += vlen
     fixed_parts = [part if part is not None else variable_offsets[i] for i, part in enumerate(fixed_parts)]
 
     # Return the concatenation of the fixed-size parts (offsets interleaved) with the variable-size parts
