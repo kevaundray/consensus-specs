@@ -1,3 +1,14 @@
+# SSZ Type System
+
+This document defines the complete SSZ type system as executable Python. The build
+pipeline extracts all Python code blocks and concatenates them into `ssz_typing.py`.
+
+## Base classes
+
+All SSZ values derive from `View`. Basic (fixed-size, non-composite) values also
+derive from `BasicView`.
+
+```python
 class View:
     """Base class for all SSZ values."""
 
@@ -44,8 +55,14 @@ class BasicView(View):
     @classmethod
     def is_fixed_byte_length(cls):
         return True
+```
 
+## Unsigned integers
 
+`uint` inherits from both `BasicView` and `int`. Arithmetic on `uint` values
+returns plain `int`; coercion happens on assignment into typed containers.
+
+```python
 class uint(BasicView, int):
     _byte_length = 0
 
@@ -144,8 +161,14 @@ class boolean(BasicView):
 
 bit = boolean
 byte = uint8
+```
 
+## Byte arrays
 
+`ByteVector` and `ByteList` inherit from `(View, bytes)` so that
+`isinstance(v, bytes)` is `True`.
+
+```python
 class ByteVector(View, bytes):
     _length = 0
     _type_cache = {}
@@ -248,8 +271,14 @@ Bytes31 = ByteVector[31]
 Bytes32 = ByteVector[32]
 Bytes48 = ByteVector[48]
 Bytes96 = ByteVector[96]
+```
 
+## Vector and List
 
+Parameterized composite types. The `__class_getitem__` cache ensures that
+`List[uint64, 128] is List[uint64, 128]`.
+
+```python
 class Vector(View):
     _element_type = None
     _length = 0
@@ -443,8 +472,13 @@ class List(View):
             elem.copy() if hasattr(elem, "copy") and callable(elem.copy) else elem
             for elem in self._data
         )
+```
 
+## Bitvector and Bitlist
 
+Fixed-length and variable-length sequences of bits.
+
+```python
 class Bitvector(View):
     _length = 0
     _type_cache = {}
@@ -573,8 +607,15 @@ class Bitlist(View):
 
     def copy(self):
         return self.__class__(list(self._data))
+```
 
+## Container
 
+Containers use `__init_subclass__` to collect `__annotations__` and support
+a `fields()` classmethod. `__setattr__` coerces raw values to the declared
+field type.
+
+```python
 class Container(View):
     _field_names = ()
     _field_types = ()
@@ -653,8 +694,13 @@ class Container(View):
                 for name in self._field_names
             }
         )
+```
 
+## Union
 
+Tagged union with `.selector()` and `.value()` method accessors.
+
+```python
 class Union(View):
     _options = ()
     _type_cache = {}
@@ -694,8 +740,14 @@ class Union(View):
         if inner is not None and hasattr(inner, "copy") and callable(inner.copy):
             inner = inner.copy()
         return self.__class__(selector=self._selector, value=inner)
+```
 
+## Progressive types and CompatibleUnion
 
+Progressive types support forward-compatible schema evolution. `CompatibleUnion`
+uses `.selector()` and `.data()` method accessors.
+
+```python
 class _ProgressiveContainerMeta(type):
     """Metaclass that makes ProgressiveContainer(active_fields=[...]) return a base class."""
 
@@ -900,8 +952,14 @@ class CompatibleUnion(View):
         if data is not None and hasattr(data, "copy") and callable(data.copy):
             data = data.copy()
         return self.__class__(selector=self._selector, data=data)
+```
 
+## Path
 
+`Path` supports generalized index computation for container field navigation.
+It is used by `get_generalized_index()` in the fork specs.
+
+```python
 def _get_depth(elem_count):
     """Return the Merkle tree depth for the given number of elements."""
     if elem_count <= 1:
@@ -1007,3 +1065,4 @@ def _path_key_to_gindex(typ, key):
         depth = _get_depth(_next_pow_of_two(max_chunks))
         return _to_gindex(chunk_i, depth)
     raise TypeError(f"Cannot compute gindex for type {typ} with key {key}")
+```

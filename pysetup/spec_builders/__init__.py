@@ -9,7 +9,6 @@ from .fulu import FuluSpecBuilder
 from .gloas import GloasSpecBuilder
 from .heze import HezeSpecBuilder
 from .phase0 import Phase0SpecBuilder
-
 spec_builders = {
     builder.fork: builder
     for builder in (

@@ -249,6 +249,79 @@ def generate_fork_specs(
         print(f"  Wrote: {init_file}")
 
 
+def generate_ssz_spec(out_dir: Path, verbose: bool = False) -> None:
+    """
+    Generate the executable SSZ spec module from ssz/simple-serialize.md.
+
+    Unlike fork specs, SSZ has no presets, configs, or fork lineage.
+    The output is a single Python module with constants and functions.
+    """
+    from pysetup.spec_builders.ssz import SszSpecBuilder
+
+    source_file = Path("ssz/simple-serialize.md")
+    if not source_file.exists():
+        raise FileNotFoundError(f"SSZ spec not found: {source_file}")
+
+    if verbose:
+        print(f"Generating SSZ spec from: {source_file}")
+
+    # Parse with empty preset/config — SSZ has neither
+    spec_object = MarkdownToSpec(source_file, preset={}, config={}, preset_name="").run()
+
+    # Assemble module: imports + constants + functions
+    imports = SszSpecBuilder.imports("").strip()
+
+    constants = "\n".join(
+        f"{name} = {vardef.value}"
+        for name, vardef in spec_object.constant_vars.items()
+    )
+
+    functions = "\n\n\n".join(spec_object.functions.values())
+
+    spec_str = "\n\n\n".join(filter(None, [imports, constants, functions])) + "\n"
+
+    # Write output
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "ssz_spec.py"
+    out_file.write_text(spec_str)
+
+    if verbose:
+        print(f"  Wrote: {out_file} ({len(spec_str):,} bytes)")
+
+
+def generate_ssz_typing(out_dir: Path, verbose: bool = False) -> None:
+    """
+    Generate the SSZ type system module from ssz/ssz-typing.md.
+
+    Extracts all Python code blocks from the markdown and concatenates them.
+    Unlike fork specs, this uses simple regex extraction — the type system
+    classes don't follow the MarkdownToSpec conventions.
+    """
+    import re
+
+    source_file = Path("ssz/ssz-typing.md")
+    if not source_file.exists():
+        raise FileNotFoundError(f"SSZ typing spec not found: {source_file}")
+
+    if verbose:
+        print(f"Generating SSZ typing from: {source_file}")
+
+    content = source_file.read_text()
+    code_blocks = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
+
+    if not code_blocks:
+        raise ValueError(f"No Python code blocks found in {source_file}")
+
+    spec_str = "\n\n\n".join(block.strip() for block in code_blocks) + "\n"
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "ssz_typing.py"
+    out_file.write_text(spec_str)
+
+    if verbose:
+        print(f"  Wrote: {out_file} ({len(spec_str):,} bytes)")
+
+
 def main() -> int:
     """Main entry point for the spec generation script."""
     parser = argparse.ArgumentParser(
@@ -311,6 +384,12 @@ Examples:
         help="Enable verbose output",
     )
 
+    parser.add_argument(
+        "--ssz",
+        action="store_true",
+        help="Generate executable SSZ spec module",
+    )
+
     args = parser.parse_args()
 
     try:
@@ -345,6 +424,12 @@ Examples:
                 source_files=source_files,
                 verbose=args.verbose,
             )
+
+        # Generate SSZ spec if requested
+        if args.all_forks or getattr(args, 'ssz', False):
+            ssz_out_dir = Path("tests/core/pyspec/eth_consensus_specs/utils/ssz")
+            generate_ssz_spec(ssz_out_dir, verbose=args.verbose)
+            generate_ssz_typing(ssz_out_dir, verbose=args.verbose)
 
         if args.verbose:
             print(f"\nSuccessfully generated {len(forks)} fork(s)")
